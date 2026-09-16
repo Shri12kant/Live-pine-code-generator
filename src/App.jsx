@@ -12,7 +12,9 @@ import {
   searchByArea,
   searchByPincode,
   getLiveLocationPinCode,
+  getIpBasedLocation,
 } from './services/pincodeApi';
+
 import {
   MapPin,
   Compass,
@@ -194,56 +196,83 @@ export default function App() {
     }
   };
 
-  // Live Location Detector
+  // Live Location Detector with Automatic IP Fallback
   const handleDetectLocation = () => {
-    if (!navigator.geolocation) {
-      showToast('Geolocation is not supported by your browser.', 'error');
-      return;
-    }
-
     setIsDetectingLocation(true);
-    showToast('Detecting your GPS location...', 'info');
+    showToast('Detecting your live location...', 'info');
 
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const { latitude, longitude } = pos.coords;
-        const liveResult = await getLiveLocationPinCode(latitude, longitude);
+    // Helper for IP-based detection when GPS fails or is denied
+    const fallbackToIp = async (reasonNotice = '') => {
+      if (reasonNotice) {
+        showToast(reasonNotice, 'info');
+      }
+      try {
+        const ipResult = await getIpBasedLocation();
         setIsDetectingLocation(false);
 
-        if (liveResult.success) {
-          setLiveLocation(liveResult);
-          showToast(`Found your area PIN: ${liveResult.pincode}!`, 'success');
+        if (ipResult.success) {
+          setLiveLocation(ipResult);
+          showToast(`Found your area PIN: ${ipResult.pincode}!`, 'success');
 
-          // If we got post office records, auto display them
-          if (liveResult.details && liveResult.details.length > 0) {
-            setResults(liveResult.details);
+          if (ipResult.details && ipResult.details.length > 0) {
+            setResults(ipResult.details);
             setHasSearched(true);
-            setActiveSearchTerm(liveResult.pincode || liveResult.areaName);
-            setQuery(liveResult.pincode || liveResult.areaName);
-            if (liveResult.pincode) setSearchMode('pincode');
+            setActiveSearchTerm(ipResult.pincode || ipResult.areaName);
+            setQuery(ipResult.pincode || ipResult.areaName);
+            if (ipResult.pincode) setSearchMode('pincode');
           }
         } else {
           showToast(
-            liveResult.message || 'Could not detect your exact area PIN. Try searching manually.',
+            ipResult.message || 'Could not detect location. Please search your city or area manually.',
             'error'
           );
         }
-      },
-      (error) => {
+      } catch (err) {
+        console.error('IP fallback failed:', err);
         setIsDetectingLocation(false);
-        let msg = 'Could not access location.';
-        if (error.code === error.PERMISSION_DENIED) {
-          msg = 'Location permission was denied. Please search your area manually.';
-        } else if (error.code === error.POSITION_UNAVAILABLE) {
-          msg = 'Location information is unavailable on this network.';
-        } else if (error.code === error.TIMEOUT) {
-          msg = 'Location request timed out. Please try again.';
+        showToast('Could not detect location. Please search manually.', 'error');
+      }
+    };
+
+    if (!navigator.geolocation) {
+      fallbackToIp('GPS not supported. Using network location...');
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const { latitude, longitude } = pos.coords;
+          const liveResult = await getLiveLocationPinCode(latitude, longitude);
+          setIsDetectingLocation(false);
+
+          if (liveResult.success) {
+            setLiveLocation(liveResult);
+            showToast(`Found your area PIN: ${liveResult.pincode}!`, 'success');
+
+            if (liveResult.details && liveResult.details.length > 0) {
+              setResults(liveResult.details);
+              setHasSearched(true);
+              setActiveSearchTerm(liveResult.pincode || liveResult.areaName);
+              setQuery(liveResult.pincode || liveResult.areaName);
+              if (liveResult.pincode) setSearchMode('pincode');
+            }
+          } else {
+            fallbackToIp('GPS coordinates unresolved. Using network location...');
+          }
+        } catch (err) {
+          console.error(err);
+          fallbackToIp('Using network location...');
         }
-        showToast(msg, 'error');
       },
-      { timeout: 12000, enableHighAccuracy: true }
+      (_error) => {
+        // GPS permission denied, timed out, or unavailable on Windows -> seamlessly fallback to IP
+        fallbackToIp('GPS unavailable or blocked. Using network IP location...');
+      },
+      { timeout: 6000, enableHighAccuracy: false, maximumAge: 300000 }
     );
   };
+
 
   // Compute available states and districts for filters
   const availableStates = useMemo(() => {

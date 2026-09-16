@@ -123,64 +123,106 @@ export async function searchByPincode(pincode) {
   }
 }
 
+
 /**
- * Reverse geocoding from Latitude & Longitude to find live area and PIN code
- * Uses OpenStreetMap Nominatim and BigDataCloud as fallback
+ * IP-based geolocation fallback
+ * Works on all computers and browsers even when GPS is disabled or denied
  */
-export async function getLiveLocationPinCode(latitude, longitude) {
+
+export async function getIpBasedLocation() {
   try {
-    // 1. Try OpenStreetMap Nominatim
-    const nominatimRes = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&addressdetails=1`,
-      {
-        headers: {
-          'Accept': 'application/json',
-        },
+    // 1. Try ipwho.is (very reliable in India with postal codes)
+    const ipRes = await fetch('https://ipwho.is/');
+    if (ipRes.ok) {
+      const data = await ipRes.json();
+      if (data && data.success) {
+        const postal = data.postal ? data.postal.replace(/\s+/g, '') : '';
+        const city = data.city || '';
+        const state = data.region || '';
+        const area = data.city || '';
+
+        if (postal && /^\d{6}$/.test(postal)) {
+          const pinDetails = await searchByPincode(postal);
+          return {
+            success: true,
+            pincode: postal,
+            areaName: area,
+            city: city,
+            state: state,
+            displayName: `${city}, ${state} (Detected via Network IP)`,
+            details: pinDetails.success ? pinDetails.data : [],
+            source: 'Network IP',
+          };
+        } else if (city) {
+          const areaDetails = await searchByArea(city);
+          return {
+            success: areaDetails.success,
+            pincode: areaDetails.data[0]?.pincode || '',
+            areaName: area,
+            city: city,
+            state: state,
+            displayName: `${city}, ${state} (Detected via Network IP)`,
+            details: areaDetails.data,
+            source: 'Network IP Area',
+          };
+        }
       }
-    );
+    }
+  } catch (err) {
+    console.warn('ipwho.is lookup failed, trying BigDataCloud client IP...', err);
+  }
 
-    if (nominatimRes.ok) {
-      const geoData = await nominatimRes.json();
-      const addr = geoData.address || {};
-      const postcode = addr.postcode ? addr.postcode.replace(/\s+/g, '') : null;
-      const suburb = addr.suburb || addr.neighbourhood || addr.residential || addr.road || addr.quarter || addr.subdivision || '';
-      const city = addr.city || addr.town || addr.village || addr.state_district || addr.county || '';
-      const state = addr.state || '';
+  // 2. Fallback to BigDataCloud client IP
+  try {
+    const bdcRes = await fetch('https://api.bigdatacloud.net/data/reverse-geocode-client');
+    if (bdcRes.ok) {
+      const bdcData = await bdcRes.json();
+      const postal = bdcData.postcode ? bdcData.postcode.replace(/\s+/g, '') : '';
+      const city = bdcData.city || bdcData.locality || '';
+      const state = bdcData.principalSubdivision || '';
 
-      if (postcode && /^\d{6}$/.test(postcode)) {
-        // Fetch detailed post office records for this live pincode
-        const pinDetails = await searchByPincode(postcode);
+      if (postal && /^\d{6}$/.test(postal)) {
+        const pinDetails = await searchByPincode(postal);
         return {
           success: true,
-          pincode: postcode,
-          areaName: suburb || city,
+          pincode: postal,
+          areaName: city,
           city: city,
           state: state,
-          displayName: geoData.display_name,
+          displayName: `${city}, ${state} (Detected via Network IP)`,
           details: pinDetails.success ? pinDetails.data : [],
-          source: 'Nominatim GPS',
+          source: 'BDC Network IP',
         };
-      } else if (suburb || city) {
-        // Postcode missing in OSM, search area by name
-        const areaToSearch = suburb || city;
-        const areaDetails = await searchByArea(areaToSearch);
+      } else if (city) {
+        const areaDetails = await searchByArea(city);
         return {
           success: areaDetails.success,
           pincode: areaDetails.data[0]?.pincode || '',
-          areaName: areaToSearch,
+          areaName: city,
           city: city,
           state: state,
-          displayName: geoData.display_name,
+          displayName: `${city}, ${state} (Detected via Network IP)`,
           details: areaDetails.data,
-          source: 'Nominatim Area Search',
+          source: 'BDC Network IP Area',
         };
       }
     }
-  } catch (e) {
-    console.warn('Nominatim reverse geocode failed, attempting fallback...', e);
+  } catch (err) {
+    console.error('All IP location lookups failed:', err);
   }
 
-  // 2. Fallback to BigDataCloud
+  return {
+    success: false,
+    message: 'Could not detect your location automatically. Please search manually by entering your city or area name above.',
+  };
+}
+
+/**
+ * Reverse geocoding from Latitude & Longitude to find live area and PIN code
+ * First tries BigDataCloud & Nominatim, then seamlessly falls back to IP location
+ */
+export async function getLiveLocationPinCode(latitude, longitude) {
+  // 1. First try BigDataCloud (fast, CORS-friendly, no User-Agent restrictions)
   try {
     const bdcRes = await fetch(
       `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`
@@ -197,33 +239,82 @@ export async function getLiveLocationPinCode(latitude, longitude) {
         return {
           success: true,
           pincode: postcode,
-          areaName: area,
+          areaName: area || city,
           city: city,
           state: state,
-          displayName: `${area}, ${city}, ${state}`,
+          displayName: `${area ? area + ', ' : ''}${city}, ${state}`,
           details: pinDetails.success ? pinDetails.data : [],
-          source: 'BigDataCloud GPS',
+          source: 'GPS',
         };
-      } else if (area) {
-        const areaDetails = await searchByArea(area);
-        return {
-          success: areaDetails.success,
-          pincode: areaDetails.data[0]?.pincode || '',
-          areaName: area,
-          city: city,
-          state: state,
-          displayName: `${area}, ${city}, ${state}`,
-          details: areaDetails.data,
-          source: 'BigDataCloud Area Search',
-        };
+      } else if (area || city) {
+        const target = area || city;
+        const areaDetails = await searchByArea(target);
+        if (areaDetails.success && areaDetails.data.length > 0) {
+          return {
+            success: true,
+            pincode: areaDetails.data[0]?.pincode || '',
+            areaName: target,
+            city: city,
+            state: state,
+            displayName: `${target}, ${state}`,
+            details: areaDetails.data,
+            source: 'GPS Area',
+          };
+        }
       }
     }
   } catch (e) {
-    console.error('BigDataCloud fallback also failed:', e);
+    console.warn('BigDataCloud coordinate reverse geocode error:', e);
   }
 
-  return {
-    success: false,
-    message: 'Could not pinpoint PIN code from your GPS coordinates. Please search manually by entering your city or area name above.',
-  };
+  // 2. Try OpenStreetMap Nominatim
+  try {
+    const nominatimRes = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&addressdetails=1`
+    );
+
+    if (nominatimRes.ok) {
+      const geoData = await nominatimRes.json();
+      const addr = geoData.address || {};
+      const postcode = addr.postcode ? addr.postcode.replace(/\s+/g, '') : null;
+      const suburb = addr.suburb || addr.neighbourhood || addr.residential || addr.road || addr.quarter || '';
+      const city = addr.city || addr.town || addr.village || addr.state_district || '';
+      const state = addr.state || '';
+
+      if (postcode && /^\d{6}$/.test(postcode)) {
+        const pinDetails = await searchByPincode(postcode);
+        return {
+          success: true,
+          pincode: postcode,
+          areaName: suburb || city,
+          city: city,
+          state: state,
+          displayName: geoData.display_name,
+          details: pinDetails.success ? pinDetails.data : [],
+          source: 'GPS Nominatim',
+        };
+      } else if (suburb || city) {
+        const areaToSearch = suburb || city;
+        const areaDetails = await searchByArea(areaToSearch);
+        if (areaDetails.success && areaDetails.data.length > 0) {
+          return {
+            success: true,
+            pincode: areaDetails.data[0]?.pincode || '',
+            areaName: areaToSearch,
+            city: city,
+            state: state,
+            displayName: geoData.display_name,
+            details: areaDetails.data,
+            source: 'GPS Area Search',
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Nominatim reverse geocode error:', e);
+  }
+
+  // 3. If GPS reverse geocoding did not return a PIN, fallback to IP location
+  return await getIpBasedLocation();
 }
+
