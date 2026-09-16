@@ -149,6 +149,9 @@ export async function getIpBasedLocation() {
             areaName: area,
             city: city,
             state: state,
+            latitude: data.latitude ? Number(data.latitude) : null,
+            longitude: data.longitude ? Number(data.longitude) : null,
+            coordinates: data.latitude && data.longitude ? `${Number(data.latitude).toFixed(4)}°, ${Number(data.longitude).toFixed(4)}°` : null,
             displayName: `${city}, ${state} (Detected via Network IP)`,
             details: pinDetails.success ? pinDetails.data : [],
             source: 'Network IP',
@@ -161,6 +164,9 @@ export async function getIpBasedLocation() {
             areaName: area,
             city: city,
             state: state,
+            latitude: data.latitude ? Number(data.latitude) : null,
+            longitude: data.longitude ? Number(data.longitude) : null,
+            coordinates: data.latitude && data.longitude ? `${Number(data.latitude).toFixed(4)}°, ${Number(data.longitude).toFixed(4)}°` : null,
             displayName: `${city}, ${state} (Detected via Network IP)`,
             details: areaDetails.data,
             source: 'Network IP Area',
@@ -189,6 +195,9 @@ export async function getIpBasedLocation() {
           areaName: city,
           city: city,
           state: state,
+          latitude: bdcData.latitude ? Number(bdcData.latitude) : null,
+          longitude: bdcData.longitude ? Number(bdcData.longitude) : null,
+          coordinates: bdcData.latitude && bdcData.longitude ? `${Number(bdcData.latitude).toFixed(4)}°, ${Number(bdcData.longitude).toFixed(4)}°` : null,
           displayName: `${city}, ${state} (Detected via Network IP)`,
           details: pinDetails.success ? pinDetails.data : [],
           source: 'BDC Network IP',
@@ -201,6 +210,9 @@ export async function getIpBasedLocation() {
           areaName: city,
           city: city,
           state: state,
+          latitude: bdcData.latitude ? Number(bdcData.latitude) : null,
+          longitude: bdcData.longitude ? Number(bdcData.longitude) : null,
+          coordinates: bdcData.latitude && bdcData.longitude ? `${Number(bdcData.latitude).toFixed(4)}°, ${Number(bdcData.longitude).toFixed(4)}°` : null,
           displayName: `${city}, ${state} (Detected via Network IP)`,
           details: areaDetails.data,
           source: 'BDC Network IP Area',
@@ -219,13 +231,69 @@ export async function getIpBasedLocation() {
 
 /**
  * Reverse geocoding from Latitude & Longitude to find live area and PIN code
- * First tries BigDataCloud & Nominatim, then seamlessly falls back to IP location
  */
 export async function getLiveLocationPinCode(latitude, longitude) {
-  // 1. First try BigDataCloud (fast, CORS-friendly, no User-Agent restrictions)
+  const numLat = Number(latitude);
+  const numLon = Number(longitude);
+  const coordString = `${numLat.toFixed(4)}°, ${numLon.toFixed(4)}°`;
+
+  // 1. Try OpenStreetMap Nominatim first (detailed postal resolution for India)
+  try {
+    const nominatimRes = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${numLat}&lon=${numLon}&addressdetails=1`
+    );
+
+    if (nominatimRes.ok) {
+      const geoData = await nominatimRes.json();
+      const addr = geoData.address || {};
+      const postcode = addr.postcode ? addr.postcode.replace(/\s+/g, '') : null;
+      const suburb = addr.suburb || addr.neighbourhood || addr.residential || addr.road || addr.quarter || addr.subdivision || '';
+      const city = addr.city || addr.town || addr.village || addr.state_district || addr.county || '';
+      const state = addr.state || '';
+
+      if (postcode && /^\d{6}$/.test(postcode)) {
+        const pinDetails = await searchByPincode(postcode);
+        return {
+          success: true,
+          pincode: postcode,
+          areaName: suburb || city,
+          city: city,
+          state: state,
+          latitude: numLat,
+          longitude: numLon,
+          coordinates: coordString,
+          displayName: geoData.display_name,
+          details: pinDetails.success ? pinDetails.data : [],
+          source: 'GPS Nominatim',
+        };
+      } else if (suburb || city) {
+        const areaToSearch = suburb || city;
+        const areaDetails = await searchByArea(areaToSearch);
+        if (areaDetails.success && areaDetails.data.length > 0) {
+          return {
+            success: true,
+            pincode: areaDetails.data[0]?.pincode || '',
+            areaName: areaToSearch,
+            city: city,
+            state: state,
+            latitude: numLat,
+            longitude: numLon,
+            coordinates: coordString,
+            displayName: geoData.display_name,
+            details: areaDetails.data,
+            source: 'GPS Area Search',
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Nominatim reverse geocode error:', e);
+  }
+
+  // 2. Try BigDataCloud
   try {
     const bdcRes = await fetch(
-      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`
+      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${numLat}&longitude=${numLon}&localityLanguage=en`
     );
     if (bdcRes.ok) {
       const bdcData = await bdcRes.json();
@@ -242,9 +310,12 @@ export async function getLiveLocationPinCode(latitude, longitude) {
           areaName: area || city,
           city: city,
           state: state,
+          latitude: numLat,
+          longitude: numLon,
+          coordinates: coordString,
           displayName: `${area ? area + ', ' : ''}${city}, ${state}`,
           details: pinDetails.success ? pinDetails.data : [],
-          source: 'GPS',
+          source: 'GPS BDC',
         };
       } else if (area || city) {
         const target = area || city;
@@ -256,6 +327,9 @@ export async function getLiveLocationPinCode(latitude, longitude) {
             areaName: target,
             city: city,
             state: state,
+            latitude: numLat,
+            longitude: numLon,
+            coordinates: coordString,
             displayName: `${target}, ${state}`,
             details: areaDetails.data,
             source: 'GPS Area',
@@ -267,54 +341,58 @@ export async function getLiveLocationPinCode(latitude, longitude) {
     console.warn('BigDataCloud coordinate reverse geocode error:', e);
   }
 
-  // 2. Try OpenStreetMap Nominatim
-  try {
-    const nominatimRes = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&addressdetails=1`
-    );
-
-    if (nominatimRes.ok) {
-      const geoData = await nominatimRes.json();
-      const addr = geoData.address || {};
-      const postcode = addr.postcode ? addr.postcode.replace(/\s+/g, '') : null;
-      const suburb = addr.suburb || addr.neighbourhood || addr.residential || addr.road || addr.quarter || '';
-      const city = addr.city || addr.town || addr.village || addr.state_district || '';
-      const state = addr.state || '';
-
-      if (postcode && /^\d{6}$/.test(postcode)) {
-        const pinDetails = await searchByPincode(postcode);
-        return {
-          success: true,
-          pincode: postcode,
-          areaName: suburb || city,
-          city: city,
-          state: state,
-          displayName: geoData.display_name,
-          details: pinDetails.success ? pinDetails.data : [],
-          source: 'GPS Nominatim',
-        };
-      } else if (suburb || city) {
-        const areaToSearch = suburb || city;
-        const areaDetails = await searchByArea(areaToSearch);
-        if (areaDetails.success && areaDetails.data.length > 0) {
-          return {
-            success: true,
-            pincode: areaDetails.data[0]?.pincode || '',
-            areaName: areaToSearch,
-            city: city,
-            state: state,
-            displayName: geoData.display_name,
-            details: areaDetails.data,
-            source: 'GPS Area Search',
-          };
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('Nominatim reverse geocode error:', e);
-  }
-
   // 3. If GPS reverse geocoding did not return a PIN, fallback to IP location
   return await getIpBasedLocation();
 }
+
+/**
+ * Direct search by Latitude and Longitude coordinates
+ * @param {string|number} latitude 
+ * @param {string|number} longitude 
+ */
+export async function searchByCoordinates(latitude, longitude) {
+  const lat = parseFloat(latitude);
+  const lon = parseFloat(longitude);
+
+  if (isNaN(lat) || isNaN(lon)) {
+    return {
+      success: false,
+      message: 'Please enter valid numbers for both Latitude and Longitude.',
+      data: [],
+    };
+  }
+
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    return {
+      success: false,
+      message: 'Invalid coordinate values. Latitude must be -90 to 90 and Longitude -180 to 180.',
+      data: [],
+    };
+  }
+
+  const result = await getLiveLocationPinCode(lat, lon);
+  if (result.success) {
+    return {
+      success: true,
+      count: result.details ? result.details.length : 0,
+      message: `Found location: ${result.areaName || result.city}, ${result.state} (PIN: ${result.pincode})`,
+      pincode: result.pincode,
+      areaName: result.areaName,
+      city: result.city,
+      state: result.state,
+      latitude: lat,
+      longitude: lon,
+      coordinates: `${lat.toFixed(4)}°, ${lon.toFixed(4)}°`,
+      data: result.details || [],
+    };
+  }
+
+  return {
+    success: false,
+    count: 0,
+    message: result.message || `No PIN code records found for coordinates (${lat}, ${lon}).`,
+    data: [],
+  };
+}
+
 

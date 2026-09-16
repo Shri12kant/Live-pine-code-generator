@@ -1,5 +1,5 @@
 import React from 'react';
-import { Navigation, Copy, Check, ExternalLink, X } from 'lucide-react';
+import { Navigation, Copy, Check, ExternalLink, X, Globe, MapPin } from 'lucide-react';
 
 export default function LiveLocationBanner({
   locationData,
@@ -11,6 +11,11 @@ export default function LiveLocationBanner({
   if (!locationData) return null;
 
   const isCopied = copiedPin === locationData.pincode;
+
+  const mapsCoordUrl =
+    locationData.latitude && locationData.longitude
+      ? `https://www.google.com/maps?q=${locationData.latitude},${locationData.longitude}`
+      : null;
 
   return (
     <div className="w-full max-w-3xl mx-auto mb-6 p-4 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-teal-500/10 to-blue-500/10 dark:from-emerald-950/40 dark:via-teal-950/40 dark:to-blue-950/40 border-2 border-emerald-500/30 dark:border-emerald-500/20 shadow-lg shadow-emerald-500/5 relative overflow-hidden transition-all animate-in fade-in slide-in-from-top-2">
@@ -30,7 +35,7 @@ export default function LiveLocationBanner({
                 Live Location Detected
               </span>
               <span className="text-xs text-gray-500 dark:text-gray-400">
-                Via GPS Reverse-Geocode
+                via {locationData.source || 'GPS Coordinates'}
               </span>
             </div>
 
@@ -40,10 +45,35 @@ export default function LiveLocationBanner({
               {locationData.state}
             </h3>
 
+            {/* Latitude / Longitude Coordinates Display */}
+            {(locationData.latitude && locationData.longitude) && (
+              <div className="mt-2 flex items-center gap-2 flex-wrap text-xs text-emerald-800 dark:text-emerald-300">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/80 dark:bg-gray-800/80 border border-emerald-300/80 dark:border-emerald-700/60 font-mono font-semibold">
+                  <Globe className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span>Lat: {Number(locationData.latitude).toFixed(4)}°</span>
+                  <span className="text-gray-400">|</span>
+                  <span>Long: {Number(locationData.longitude).toFixed(4)}°</span>
+                </div>
+
+                {mapsCoordUrl && (
+                  <a
+                    href={mapsCoordUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
+                  >
+                    <MapPin className="w-3 h-3" />
+                    <span>View Coordinates on Map</span>
+                    <ExternalLink className="w-2.5 h-2.5" />
+                  </a>
+                )}
+              </div>
+            )}
+
             {locationData.pincode && (
-              <div className="mt-2 flex items-center gap-3 flex-wrap">
+              <div className="mt-3 flex items-center gap-3 flex-wrap">
                 <div className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-gray-800 rounded-xl border border-emerald-300 dark:border-emerald-700/60 shadow-xs">
-                  <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Your PIN:</span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Postal PIN:</span>
                   <span className="text-xl font-black tracking-widest text-emerald-600 dark:text-emerald-400 font-mono">
                     {locationData.pincode}
                   </span>

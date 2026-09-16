@@ -13,7 +13,9 @@ import {
   searchByPincode,
   getLiveLocationPinCode,
   getIpBasedLocation,
+  searchByCoordinates,
 } from './services/pincodeApi';
+
 
 import {
   MapPin,
@@ -177,11 +179,40 @@ export default function App() {
     setFilterText('');
 
     let res;
-    if (mode === 'pincode' || /^\d{6}$/.test(cleanTerm)) {
+    // Check if mode is coordinates OR input matches lat, lon pattern
+    const isCoordPattern = /^[-+]?([1-8]?\d(\.\d+)?|90(\.0+)?)[,\s]+[-+]?(180(\.0+)?|((1[0-7]\d)|([1-9]?\d))(\.\d+)?)$/.test(cleanTerm);
+
+    if (mode === 'coordinates' || isCoordPattern) {
+      const parts = cleanTerm.split(/[,\s]+/).map(Number).filter((n) => !isNaN(n));
+      if (parts.length >= 2) {
+        res = await searchByCoordinates(parts[0], parts[1]);
+        if (res.success) {
+          setLiveLocation({
+            pincode: res.pincode,
+            areaName: res.areaName,
+            city: res.city,
+            state: res.state,
+            latitude: res.latitude,
+            longitude: res.longitude,
+            coordinates: res.coordinates,
+            displayName: `${res.areaName || res.city}, ${res.state}`,
+            source: 'Lat/Long Coordinates',
+          });
+          showToast(`Resolved coordinates: ${res.coordinates} -> PIN ${res.pincode}`, 'success');
+        }
+      } else {
+        res = {
+          success: false,
+          data: [],
+          message: 'Please enter comma-separated Latitude and Longitude (e.g. 28.6139, 77.2090)',
+        };
+      }
+    } else if (mode === 'pincode' || /^\d{6}$/.test(cleanTerm)) {
       res = await searchByPincode(cleanTerm);
     } else {
       res = await searchByArea(cleanTerm);
     }
+
 
     setIsLoading(false);
 
